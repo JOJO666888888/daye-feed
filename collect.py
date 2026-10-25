@@ -32,14 +32,32 @@ KEYWORDS = re.compile(
 # 明显不是「站点」的噪声
 NOISE = re.compile(r"^(RT @|https?://\S+$)", re.I)
 
+# 搜索来源的垃圾/推广帖，直接丢
+SPAM = re.compile(
+    r"18\+|nsfw|porn|xxx|onlyfans|adult content|\bsex\b|crypto|airdrop|"
+    r"casino|betting|forex|\bgiveaway\b|follow (me|back)|dm (me|for)",
+    re.I,
+)
 
-def load_source(url=None, path=None):
+
+def load_source(url=None, path=None, retries=3, timeout=30):
     if path:
         raw = open(path, encoding="utf-8").read()
     else:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            raw = r.read().decode("utf-8", "ignore")
+        raw = None
+        last = None
+        for i in range(retries):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    raw = r.read().decode("utf-8", "ignore")
+                break
+            except Exception as e:
+                last = e
+                print(f"[!] 拉取失败({i+1}/{retries})：{type(e).__name__}", file=sys.stderr)
+                time.sleep(3 * (i + 1))
+        if raw is None:
+            raise SystemExit(f"拉取失败：{last}")
     records = []
     for line in raw.splitlines():
         line = line.strip()
@@ -94,12 +112,14 @@ def main():
     ap.add_argument("--out-dir", default=".")
     ap.add_argument("--max", type=int, default=60)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--timeout", type=int, default=30)
+    ap.add_argument("--min-likes", type=int, default=0)
     args = ap.parse_args()
 
     if not args.url and not args.file:
         sys.exit("需要 --url 或 --file")
 
-    records = load_source(args.url, args.file)
+    records = load_source(args.url, args.file, timeout=args.timeout)
     now = time.time()
 
     try:
@@ -119,7 +139,9 @@ def main():
             continue
         if args.since and ts and (now - ts) > args.since * 3600:
             continue
-        if NOISE.search(text.strip()) or not KEYWORDS.search(text):
+        if NOISE.search(text.strip()) or SPAM.search(text) or not KEYWORDS.search(text):
+            continue
+        if args.min_likes and (r.get("likes") or 0) < args.min_likes:
             continue
         text = html.unescape(text)
         urls = [u for u in (r.get("urls") or []) if not re.search(r"x\.com|twitter\.com|t\.co", u)]

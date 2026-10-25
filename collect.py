@@ -19,13 +19,23 @@ import sys
 import time
 import urllib.request
 
-# 命中即认为「可能值得看」的总闸门，宁宽勿窄，后面还有分类和评分
-KEYWORDS = re.compile(
+# 必须同时命中「福利词」和「主题词」才算候选：只加一个 free 的广告会被挡掉
+BENEFIT = re.compile(
     r"free|免费|白嫖|白给|no signup|unlimited|无限制|open.?source|开源|"
-    r"playground|beta|waitlist|invite|credits?|quota|额度|trial|试用|限免|"
-    r"coupon|promo|折扣|优惠|兑换码|giveaway|launch|release|now available|"
-    r"gradio|huggingface|space|api|vps|gpu|compute|hosting|server|算力|服务器|云主机|"
-    r"tts|voice|music|video|image|model",
+    r"credits?|quota|额度|trial|试用|限免|coupon|promo|折扣|优惠|兑换码|"
+    r"giveaway|waitlist|公测|赠送",
+    re.I,
+)
+
+TOPIC = re.compile(
+    r"\bai\b|\bllm\b|gpt|claude|gemini|deepseek|qwen|kimi|模型|大模型|"
+    r"image|diffusion|flux|midjourney|seedream|生图|绘图|出图|抠图|"
+    r"video|veo|sora|kling|runway|pika|视频生成|"
+    r"audio|voice|tts|speech|music|suno|语音|配音|音乐|"
+    r"cod(e|ing)|cursor|copilot|ide|代码|编程|"
+    r"agent|mcp|智能体|"
+    r"\bvps\b|\bgpu\b|compute|hosting|server|云主机|算力|服务器|"
+    r"huggingface|gradio|api|playground|token|模型服务",
     re.I,
 )
 
@@ -35,7 +45,9 @@ NOISE = re.compile(r"^(RT @|https?://\S+$)", re.I)
 # 垃圾/推广帖
 SPAM = re.compile(
     r"18\+|nsfw|porn|xxx|onlyfans|adult content|\bsex\b|airdrop|"
-    r"casino|betting|forex|follow (me|back)|dm (me|for)",
+    r"casino|betting|forex|follow (me|back)|dm (me|for)|"
+    r"pxf\.io|bit\.ly|tinyurl|shorturl|linktr\.ee|t\.me/\+|"
+    r"betano|1xbet|betwinner|melbet|\biphone\b|\bprize\b|claim your (prize|reward)",
     re.I,
 )
 
@@ -45,7 +57,8 @@ CAPS = [
     ("音频/语音", r"\baudio|\bvoice|\btts\b|speech|music|suno|elevenlabs|配音|语音|音乐"),
     ("图像", r"\bimage|diffusion|flux|midjourney|nano.?banana|seedream|img2img|"
              r"inpaint|upscal|生图|绘图|抠图|修图|出图|超分"),
-    ("代码/IDE", r"\bcod(e|ing)\b|cursor|copilot|\bide\b|代码|编程"),
+    ("代码/IDE", r"\bcoding\b|\bcode (agent|editor|completion|model|assistant)|"
+                 r"cursor|copilot|\bide\b|代码|编程|程序员"),
     ("Agent/工具", r"\bagent|workflow|automation|\bmcp\b|智能体|工作流"),
     ("算力/VPS", r"\bvps\b|\bgpu\b|compute|hosting|cloud|server|colocation|"
                  r"算力|服务器|云主机|主机|杜甫"),
@@ -163,7 +176,9 @@ def main():
             continue
         if args.since and ts and (now - ts) > args.since * 3600:
             continue
-        if NOISE.search(text.strip()) or SPAM.search(text) or not KEYWORDS.search(text):
+        if NOISE.search(text.strip()) or SPAM.search(text):
+            continue
+        if not (BENEFIT.search(text) and TOPIC.search(text)):
             continue
         if args.min_likes and (r.get("likes") or 0) < args.min_likes:
             continue
@@ -180,7 +195,20 @@ def main():
             "created_at": r.get("created_at", ""),
         })
 
-    cands.sort(key=lambda c: (bool(c["site_urls"]), c["likes"] or 0), reverse=True)
+    # 同一条内容被多个搬运号刷屏 → 按「标题归一 + 主域名」去重，留互动最高的
+    dedup, keys = [], set()
+    for c in sorted(cands, key=lambda c: c["likes"] or 0, reverse=True):
+        dom = ""
+        if c["site_urls"]:
+            dom = re.sub(r"^https?://(www\.)?", "", c["site_urls"][0]).split("/")[0].lower()
+        key = (re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", c["title"].lower())[:40], dom)
+        if key in keys:
+            continue
+        keys.add(key)
+        dedup.append(c)
+    cands = dedup
+
+    cands.sort(key=lambda c: (bool(c["site_urls"]), len(c["perks"]), c["likes"] or 0), reverse=True)
     cands = cands[: args.max]
 
     os.makedirs(args.out_dir, exist_ok=True)

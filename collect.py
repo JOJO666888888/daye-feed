@@ -14,6 +14,7 @@
 沙箱里 x.com 不通，但 raw.githubusercontent.com 通，所以走这条路。
 """
 import argparse
+import html
 import json
 import os
 import re
@@ -120,7 +121,14 @@ def main():
             continue
         if NOISE.search(text.strip()) or not KEYWORDS.search(text):
             continue
+        text = html.unescape(text)
         urls = [u for u in (r.get("urls") or []) if not re.search(r"x\.com|twitter\.com|t\.co", u)]
+        # 老格式没有 urls 字段，从正文里捞裸链接
+        for m in re.findall(r"https?://[^\s\"'）)】]+", text):
+            if re.search(r"x\.com|twitter\.com|t\.co|pic\.", m):
+                continue
+            if m not in urls:
+                urls.append(m)
         cands.append({
             "id": rid,
             "title": text.split("\n")[0][:60].strip(),

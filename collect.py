@@ -184,14 +184,21 @@ def load_source(url=None, path=None, retries=3, timeout=30):
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req, timeout=timeout) as r:
-                    raw = r.read().decode("utf-8", "ignore")
+                    expected = r.headers.get("Content-Length")
+                    data = r.read()
+                # raw.githubusercontent.com 会中途断流，不校验长度就会拿到半截 feed
+                if expected and len(data) != int(expected):
+                    raise IOError(f"下载不完整 {len(data)}/{expected} 字节")
+                raw = data.decode("utf-8", "ignore")
                 break
             except Exception as e:
                 last = e
-                print(f"[!] 拉取失败({i + 1}/{retries})：{type(e).__name__}", file=sys.stderr)
+                print(f"[!] 拉取失败({i + 1}/{retries})：{type(e).__name__} {e}", file=sys.stderr)
                 time.sleep(3 * (i + 1))
         if raw is None:
             raise SystemExit(f"拉取失败：{last}")
+        if not raw.endswith("\n"):
+            raw += "\n"
     out = []
     for line in raw.splitlines():
         line = line.strip()

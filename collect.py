@@ -299,6 +299,19 @@ def main():
         seen = set()
 
     cands, skipped, paid_dropped, card_dropped = [], 0, 0, 0
+    rejected = []          # 被粗筛丢掉的条目，附原因；供下游复查是否误杀
+
+    def keep_rejected(reason, r, text, rid):
+        if len(rejected) < 150:
+            rejected.append({
+                "reason": reason,
+                "id": rid,
+                "author": r.get("author", ""),
+                "x_url": r.get("x_url") or r.get("url", ""),
+                "created_at": r.get("created_at", ""),
+                "text": text[:220],
+            })
+
     for r in records:
         rid = str(r.get("id") or r.get("url") or "")
         text = html.unescape(r.get("text") or "")
@@ -311,9 +324,11 @@ def main():
         if args.since and ts and (now - ts) > args.since * 3600:
             continue
         if NOISE.search(text.strip()) or SPAM.search(text):
+            keep_rejected("噪音/垃圾", r, text, rid)
             continue
         benefit_text = FREE_NOISE.sub(" ", text)
         if not (BENEFIT.search(benefit_text) and TOPIC.search(text)):
+            keep_rejected("关键词未命中", r, text, rid)
             continue
         if args.min_likes and (r.get("likes") or 0) < args.min_likes:
             continue
@@ -325,10 +340,12 @@ def main():
             pay = True
         if not args.keep_paid and pay is True:
             paid_dropped += 1
+            keep_rejected("要付费", r, text, rid)
             continue
         if card == "required":
             card_dropped += 1
             if not args.keep_paid:
+                keep_rejected("要绑卡", r, text, rid)
                 continue
 
         cands.append({
@@ -378,6 +395,8 @@ def main():
     if not args.dry_run:
         json.dump(cands, open(os.path.join(args.out_dir, "candidates.json"), "w", encoding="utf-8"),
                   ensure_ascii=False, indent=2)
+        json.dump(rejected, open(os.path.join(args.out_dir, "rejected.json"), "w", encoding="utf-8"),
+                  ensure_ascii=False, indent=2)
         seen |= {c["id"] for c in cands}
         json.dump(sorted(seen), open(args.seen, "w", encoding="utf-8"))
 
@@ -389,6 +408,7 @@ def main():
     lines = [f"# 打野 digest · {time.strftime('%Y-%m-%d %H:%M')}", "",
              f"源记录 {len(records)} 条｜历史已见 {skipped}｜本次候选 **{len(cands)}**｜"
              f"丢弃：要付费 {paid_dropped}、要绑卡 {card_dropped}", "",
+             f"另有 {len(rejected)} 条被关键词粗筛挡下，清单在 rejected.json，可人工扫一眼有没有误杀", "",
              f"品类：{stat or '无'}", ""]
 
     groups = {}

@@ -25,12 +25,14 @@ import urllib.request
 
 # ── 判定：必须同时命中「福利词」和「主题词」 ──────────────────────────
 BENEFIT = re.compile(
-    r"\bfree\b|freebie|免费|白嫖|白给|零成本|no cost|"
-    r"giveaway|限免|永久免费|终身|"
-    r"credits?|quota|额度|赠金|赠送|试用|trial|beta|waitlist|公测|"
-    r"coupon|promo|discount|% ?off|折扣|优惠|兑换码|代金券|满减|"
-    r"open.?source|开源|apache|mit licen[sc]e|"
-    r"student (pack|plan)|学生包|教育优惠|lifetime deal|限时|"
+    r"\bfree\b|freebie|免费|白嫖|白给|零成本|no cost|no charge|"
+    r"giveaway|限免|永久免费|终身免费|"
+    r"credits?|quota|额度|赠金|赠送|免费试用|free trial|trial account|"
+    r"public beta|open beta|beta access|公测|waitlist 开放|"
+    r"coupon|promo code|discount code|% ?off|折扣码|优惠码|兑换码|代金券|满减|"
+    r"open.?source (release|project|model|repo|weights)|开源(发布|项目|模型|仓库)|"
+    r"open weights|apache 2\.0|mit licen[sc]e|"
+    r"student (pack|plan)|学生包|教育优惠|lifetime deal|"
     r"1 year free|首年免费|免费领|领取|白拿",
     re.I,
 )
@@ -75,9 +77,32 @@ SPAM = re.compile(
     r"casino|betting|forex|follow (me|back)|dm (me|for)|"
     r"pxf\.io|bit\.ly|tinyurl|shorturl|linktr\.ee|t\.me/\+|"
     r"betano|1xbet|betwinner|melbet|\biphone\b|\bprize\b|claim your (prize|reward)|"
-    r"招代理|招商|代理加盟|刷单|兼职|日赚|躺赚|加微信",
+    r"招代理|招商|代理加盟|刷单|兼职|日赚|躺赚|加微信|"
+    # 卖号 / 色情 / 博彩机器人：这类号命中"白嫖"极高但内容全是垃圾
+    r"账号购买|账号出售|卖号|收号|裸聊|约炮|外围|色情|博彩|赌场|"
+    r"洗码|代收款|TG账号|飞机账号|ins账号|谷歌账号",
     re.I,
 )
+
+# 判断这条帖子是否在讲 AI：没有 AI 上下文就不许归到 AI·* 品类
+# （否则 "Audiophile headphones" 会被 audio 规则误判成 AI·音频）
+AI_CTX = re.compile(
+    r"\bai\b|\bllm\b|gpt|claude|gemini|deepseek|qwen|kimi|模型|大模型|"
+    r"diffusion|生图|绘图|视频生成|语音合成|\bagent\b|\bmcp\b|智能体|"
+    r"huggingface|gradio|inference|prompt|token",
+    re.I,
+)
+
+# 「free shipping / 包邮」不是福利，先剔掉再判
+FREE_NOISE = re.compile(
+    r"free (shipping|delivery|s/h|s&h|returns?|gift wrap)|包邮|免运费|"
+    r"buy one get one|bogo",
+    re.I,
+)
+
+# 出现价格就基本是「要花钱」，除非同时明确说免费
+HAS_PRICE = re.compile(r"[$￥]\s?\d|\d+(\.\d+)?\s*(美元|元|usd|eur|gbp)", re.I)
+FREE_CLAIM = re.compile(r"\bfree\b|免费|白嫖|0 元|\$0\b|zero cost|no cost", re.I)
 
 # 品类：顺序即优先级，取第一个命中
 CAPS = [
@@ -188,7 +213,10 @@ def parse_ts(rec):
 
 
 def classify(text):
+    is_ai = bool(AI_CTX.search(text))
     for name, pat in CAPS:
+        if name.startswith("AI") and not is_ai:
+            continue
         if re.search(pat, text, re.I):
             return name
     return "其他"
@@ -273,13 +301,17 @@ def main():
             continue
         if NOISE.search(text.strip()) or SPAM.search(text):
             continue
-        if not (BENEFIT.search(text) and TOPIC.search(text)):
+        benefit_text = FREE_NOISE.sub(" ", text)
+        if not (BENEFIT.search(benefit_text) and TOPIC.search(text)):
             continue
         if args.min_likes and (r.get("likes") or 0) < args.min_likes:
             continue
 
         card = card_state(text)
         pay = pay_state(text)
+        # 带价格又没有明确免费 → 这就是要花钱的，直接丢
+        if pay is None and HAS_PRICE.search(text) and not FREE_CLAIM.search(benefit_text):
+            pay = True
         if not args.keep_paid and pay is True:
             paid_dropped += 1
             continue

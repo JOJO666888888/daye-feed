@@ -113,7 +113,9 @@ CAPS = [
     ("AI·代码", r"\bcoding\b|\bcode (agent|editor|completion|model|assistant)|"
                 r"cursor|copilot|\bide\b|代码|编程|程序员"),
     ("AI·Agent", r"\bagent|workflow|automation|\bmcp\b|智能体|工作流"),
-    ("AI·文本", r"\bllm\b|\bchat\b|reasoning|\bvlm\b|\bmodel\b|token|大模型|文本|推理"),
+    ("AI·文本", r"\bllm\b|\bchat\b|reasoning|\bvlm\b|\bmodel\b|token|大模型|文本|推理|"
+                r"豆包|通义|文心|kimi|qwen|deepseek|智谱|claude|gpt|gemini"),
+    ("AI·通用", r"\bai\b|人工智能|额度|credits?|token"),
     ("云与主机", r"\bvps\b|\bgpu\b|compute|hosting|cloud|server|colocation|"
                  r"domain|\bssl\b|\bdns\b|mailbox|算力|服务器|云主机|主机|域名|证书|邮箱"),
     ("软件授权", r"licen[sc]e|activation|激活|正版|office|windows|adobe|jetbrains|"
@@ -272,6 +274,8 @@ def main():
     ap.add_argument("--max", type=int, default=80)
     ap.add_argument("--min-likes", type=int, default=0)
     ap.add_argument("--timeout", type=int, default=30)
+    ap.add_argument("--per-author", type=int, default=3,
+                    help="同一作者最多保留几条（默认 3，防刷屏）")
     ap.add_argument("--keep-paid", action="store_true",
                     help="保留明确要付费的条目（默认丢弃，只留零成本）")
     ap.add_argument("--dry-run", action="store_true")
@@ -338,7 +342,12 @@ def main():
 
     # 同一条内容被多个搬运号刷屏 → 按「标题归一 + 主域名」去重，留互动最高的
     dedup, keys = [], set()
+    author_n = {}
     for c in sorted(cands, key=lambda c: c["likes"] or 0, reverse=True):
+        a = c["x_post_author"]
+        if author_n.get(a, 0) >= args.per_author:
+            continue
+        author_n[a] = author_n.get(a, 0) + 1
         dom = ""
         if c["site_urls"]:
             dom = re.sub(r"^https?://(www\.)?", "", c["site_urls"][0]).split("/")[0].lower()
